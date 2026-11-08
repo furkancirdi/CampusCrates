@@ -1,0 +1,6 @@
+{
+  "name": "CampusCrates.Rules.Tests",
+  "references": ["CampusCrates.Rules", "CampusCrates.Layout"],
+  "includePlatforms": ["Editor"],
+  "optionalUnityReferences": ["TestAssemblies"]
+}
