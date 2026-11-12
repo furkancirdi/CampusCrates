@@ -1,76 +1,74 @@
 # Campus Crates
 
-A small triple-match puzzle prototype for mobile, built in Unity 6. You pack supplies for a campus festival: pick a tile, send it to a 7-slot tray, and three of a kind become a crate.
+A small triple-match puzzle for phones, made in Unity 6. You are packing supplies for a campus festival: tap a tile, it goes to a tray with 7 slots, and three of the same kind turn into a crate.
 
-I built it as a product exercise. I am a software developer moving into product work in mobile games, and I wanted a real project where I had to make and defend product decisions: what the player learns first, when a new rule appears, and how I would know if it works.
+I am a software developer and I want to move into product work in mobile games. I made this to practice the product side on something real: what the player should learn first, when to add a new rule, and how I would check that it works.
 
-**Status:** playable prototype, 6 levels, Windows build. It has not been tested with outside players yet, so there is no retention or playtest data in this repo.
+It is a prototype. There are 6 levels and a Windows build. Nobody outside has playtested it yet, so I have no player data to show.
 
 ## How it plays
 
-- Only uncovered tiles can be picked. Covered tiles show a lock.
-- A picked tile moves to the tray. Three of the same kind clear and become a crate.
-- Pack every tile to win. If the tray holds 7 tiles with no match, the attempt ends.
-- From Level 2 a hint button highlights the third tile when two matching ones are already in the tray.
+You can only pick tiles that are not covered. Covered ones show a lock. A picked tile goes to the tray, and three of a kind clear out and become a crate. Pack everything and you win. If the tray is full with 7 tiles and no match, you lose the attempt.
 
-## Level order
+From Level 2 there is a hint button. It points at the third tile when you already have two of that kind in the tray.
 
-Each level adds one new thing, so the player never has to learn two rules at once.
+## Levels
 
-| Level | What is new |
+I tried to add only one new thing per level.
+
+| Level | New thing |
 | --- | --- |
-| 1 | Three open notebooks and a guided first match |
-| 2 | A covered tile: remove the pencil in front to reach the third notebook |
-| 3 | A third supply type and three crates |
-| 4 | Four supply types; the tray can now fill up and end the attempt |
-| 5 | Pyramid layout: one tile on top can cover four below |
-| 6 | Star layout: some tiles are fully hidden under others |
+| 1 | Three open notebooks, first match with a guide |
+| 2 | A covered tile. You move the pencil to reach the third notebook |
+| 3 | A third supply type, three crates |
+| 4 | Four types. This is the first level where the tray can fill up |
+| 5 | Pyramid. One tile on top can cover four |
+| 6 | Star. Some tiles are completely hidden under others |
 
-## Progress and rewards
+## Outside the levels
 
-- **Campus map:** six stops on a festival route that show finished, open and locked levels.
-- **Festival stand:** the first clear of Levels 1 to 3 each adds a delivery and upgrades the stand.
-- **Coins:** a first clear pays more on later levels; replays pay a small fixed amount.
-- **Club room:** coins buy seven decoration spots, each with three styles that can be swapped for free after purchase.
+- A campus map with six stops that shows which levels are done, open or locked
+- A festival stand that grows with the first three levels
+- Coins. The first clear of a level pays more than a replay
+- A club room where coins buy seven decoration spots. Each has three styles, and switching style is free after you buy it
 
-Progress, coins and the room are saved locally on the device.
+Everything is saved on the device.
 
-## Product thinking behind it
+## Why it looks like this
 
-**Reference games.** Before scoping, I played Food Match 3D, Tile Match and Braindom and took notes on their onboarding, core loop, rewards and ad placement. Tile Match is the closest mechanical reference (limited tile access, a 7-slot tray, triples that do not need to be adjacent). Food Match shaped how the basic action and helpers are introduced step by step.
+Before I decided anything I played Food Match 3D, Tile Match and Braindom and wrote down how they teach the game, what the core loop is, how they reward you and where ads show up. Tile Match is the closest one to this game: limited access to tiles, 7 slots, and the three tiles do not have to be next to each other. From Food Match I took the idea of teaching the main action first and the helpers later.
 
-**First-time experience.** Level 1 walks the player through a single match with a highlighted tile and a moving arrow. Level 2 asks them to apply the same rule alone, with one extra step. The guide turns off after the first crate.
+Level 1 holds your hand for exactly one match, with a highlight and an arrow. Level 2 asks for the same thing with one extra step and no guide.
 
-**How I would measure it.** The main question is whether a new player understands tile access without help. The metric I defined: of the players who start Level 2 for the first time, how many finish it on the first attempt, within 120 seconds, with no help from the observer. Supporting notes: time to first match, taps on locked tiles, hint use and retries.
+The thing I most want to know is whether a new player understands which tiles can be picked without anyone telling them. So the number I would look at is this: of the people who start Level 2 for the first time, how many finish it on the first try, in under 120 seconds, with no help. I would also note the time to the first match, taps on locked tiles, hint use and retries.
 
-**Next step.** A small observed playtest (three people), one change based on what it shows, then a second round with new players.
+Next I want to watch three people play, change one thing based on what I see, and then try again with new people.
 
-## How it was built
+## How I built it
 
-I directed the project and made the product and design decisions. Most of the C# code was written with AI coding assistants. My part was to define what each step should do, write the acceptance criteria, check every build in the Unity Simulator, and decide what to change. The art was generated with AI image tools from my prompts.
+Most of the C# was written with AI coding assistants. I did not want to hide that. My part was deciding what each step should do, writing down what "done" means, checking every build in the Unity Simulator and choosing what to change next. The art is also AI generated, from my prompts.
 
-The game rules are separated from the Unity view, so they can be tested without opening the editor.
+The rules are kept apart from the Unity screen code, which means they can be tested without opening the editor.
 
-- `Assets/Scripts/Rules`: board rules, level data, progress, coins and the club room
-- `Assets/Scripts/Layout`: portrait layout and tile stacking
-- `Assets/Scripts`: the Unity UI view and small UI helpers
-- `Assets/Tests/EditMode`: 28 NUnit tests covering rules, level solvability, rewards and layout
+- `Assets/Scripts/Rules` has the board rules, level data, progress, coins and the club room
+- `Assets/Scripts/Layout` has the portrait layout and tile stacking
+- `Assets/Scripts` has the Unity view and a few UI helpers
+- `Assets/Tests/EditMode` has 28 NUnit tests for rules, level solvability, rewards and layout
 
-## Run it
+## Running it
 
-1. Install Unity **6000.3.7f1** (Unity Hub will offer it when you open the project).
-2. Open this folder as a project and load `Assets/Scenes/Main.unity`.
-3. Press Play. The Device Simulator with a phone preset gives the intended portrait view.
-4. Tests: **Window > General > Test Runner > EditMode > Run All**.
+Open the folder with Unity 6000.3.7f1, load `Assets/Scenes/Main.unity` and press Play. It is designed for portrait, so use the Device Simulator with a phone selected.
 
-## Known limits
+Tests are under Window > General > Test Runner > EditMode.
 
-- Tested in the Unity Simulator and as a Windows build; not yet on a physical phone.
-- No analytics events, ads or in-app purchases.
-- Six levels only; difficulty order has not been validated with players.
+## What is missing
+
+- I have only run it in the Simulator and as a Windows build, not on a real phone
+- No analytics, ads or purchases
+- Only six levels, and I have not checked the difficulty order with real players
 
 ## Credits
 
-- [LitMotion](https://github.com/annulusgames/LitMotion) for tile and UI animation
-- [Fredoka](https://fonts.google.com/specimen/Fredoka) typeface, SIL Open Font License (license text in `Assets/Resources/CampusCrates/Theme/Fredoka-OFL.txt`)
-- Food Match 3D, Tile Match and Braindom are products of their owners and are mentioned only as design references. This project is not affiliated with them.
+Animation uses [LitMotion](https://github.com/annulusgames/LitMotion). The font is [Fredoka](https://fonts.google.com/specimen/Fredoka) under the SIL Open Font License; the license text is in `Assets/Resources/CampusCrates/Theme/Fredoka-OFL.txt`.
+
+Food Match 3D, Tile Match and Braindom belong to their owners. I only used them as references and this project has no connection to them.
