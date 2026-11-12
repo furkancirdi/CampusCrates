@@ -9,7 +9,7 @@ using DeviceScreen = UnityEngine.Device.Screen;
 
 namespace CampusCrates
 {
-    public sealed class PrototypeBoardView : MonoBehaviour
+    public sealed partial class PrototypeBoardView : MonoBehaviour
     {
         private const string ReachedLevelKey = "CampusCrates.ReachedLevel";
         private const string CompletedLevelKey = "CampusCrates.CompletedLevel";
@@ -53,15 +53,41 @@ namespace CampusCrates
             new[] { new Vector2(.706f, .778f), new Vector2(.635f, .800f) }
         };
 
+        // Blocked tiles read as the same tile resting in shadow, not as a hole in the board.
+        private static readonly Color32 BlockedFace = new Color32(150, 144, 131, 255);
+        private static readonly Color32 BlockedIcon = new Color32(128, 125, 118, 255);
+        private static readonly Color32 LockCutout = new Color32(147, 137, 117, 255);
+        private static readonly Color32 PlayMat = new Color32(18, 58, 54, 132);
+        private static readonly Color32 SlotAlarm = new Color32(196, 62, 44, 215);
+        private const float FlightTime = .3f;
+
         private CardDisplay[][] cards;
         private CardDisplay[] tileCards;
         private readonly Image[] slots = new Image[PackingBoard.TrayCapacity];
-        private readonly RectTransform[] slotIcons = new RectTransform[PackingBoard.TrayCapacity];
-        private readonly SupplyKind?[] slotKinds = new SupplyKind?[PackingBoard.TrayCapacity];
         private readonly Dictionary<SupplyKind, Sprite> supplyArt = new Dictionary<SupplyKind, Sprite>();
         private readonly List<Sprite> generatedArt = new List<Sprite>();
-        private RectTransform flyingCard;
-        private MotionHandle cardFlight;
+        private readonly List<Texture2D> generatedTextures = new List<Texture2D>();
+        private readonly List<TrayItem> trayItems = new List<TrayItem>();
+        private readonly List<MotionHandle> effectMotions = new List<MotionHandle>();
+        private RectTransform trayGroup;
+        private RectTransform trayLayer;
+        private RectTransform effectsLayer;
+        private RectTransform crateIcon;
+        private Sprite glowSprite;
+        private Sprite sparkleSprite;
+        private int activeMerges;
+        private int displayedCrates;
+        private int shownTrayCount = -1;
+        private float resultDueAt = -1f;
+        private float entranceEndsAt;
+        private CardDisplay highlightedCard;
+        private MotionHandle screenFade;
+        private MotionHandle settingsFade;
+        private RectTransform settingsDialog;
+        private CanvasGroup settingsGroup;
+        private Image completionTint;
+        private Image homeGlow;
+        private readonly List<RectTransform> homeTwinkles = new List<RectTransform>();
         private PackingBoard board;
         private Font font;
         private Font detailFont;
@@ -83,7 +109,6 @@ namespace CampusCrates
         private RectTransform trailParcel;
         private RectTransform homeCrate;
         private RectTransform resultPanel;
-        private float resultOpenedAt;
         private int lastMapStop;
         private int parcelSegment = -1;
         private float parcelStartedAt;
@@ -94,7 +119,6 @@ namespace CampusCrates
         private Text guide;
         private RectTransform guideMarker;
         private RectTransform guideArrow;
-        private Outline highlightedTile;
         private Sprite roundedTile;
         private Texture2D roundedTexture;
         private Rect lastSafeArea;
@@ -120,9 +144,26 @@ namespace CampusCrates
         {
             public Button Button;
             public RectTransform Icon;
+            public Image IconImage;
             public RectTransform Lock;
             public Outline HintOutline;
-            public CanvasGroup Shade;
+            public bool? WasReady;
+            public MotionHandle Anim;
+            public MotionHandle Move;
+        }
+
+        // The tray is drawn from its own list so items can fly, slide and merge while the
+        // rules have already moved on. Rapid taps never wait for an animation.
+        private sealed class TrayItem
+        {
+            public RectTransform Rect;
+            public SupplyKind Kind;
+            public bool Flying;
+            public float Start;
+            public Vector2 From;
+            public Vector2 FromSize;
+            public bool CompletesTrio;
+            public MotionHandle Punch;
         }
 
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
@@ -143,6 +184,7 @@ namespace CampusCrates
             legacyFont = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
             font = Resources.Load<Font>("CampusCrates/Theme/Fredoka") ?? legacyFont;
             detailFont = Resources.Load<Font>("CampusCrates/Theme/Fredoka-Medium") ?? font;
+            titleFont = Resources.Load<Font>("CampusCrates/Theme/Fredoka-Bold") ?? font;
             var tileTexture = Resources.Load<Texture2D>("CampusCrates/Theme/tile-face");
             if (tileTexture != null)
             {
@@ -151,6 +193,7 @@ namespace CampusCrates
                 generatedArt.Add(tileFace);
             }
             CreateRoundedTile();
+            CreateEffectSprites();
             GetComponent<Canvas>().renderMode = RenderMode.ScreenSpaceOverlay;
 
             var scaler = GetComponent<CanvasScaler>();
@@ -169,9 +212,11 @@ namespace CampusCrates
             int legacyReached = Mathf.Clamp(PlayerPrefs.GetInt(ReachedLevelKey, 1), 1, ShapeLevel.Last);
             campusProgress = new CampusProgress(PlayerPrefs.GetInt(CompletedLevelKey, legacyReached - 1));
             lastMapStop = campusProgress.UnlockedLevel;
+            LoadMeta();
             BuildHome();
             BuildMap();
             BuildGame();
+            BuildRoom();
             BuildSettings();
             UpdateViewport();
             LoadLevel(campusProgress.UnlockedLevel);
@@ -183,29 +228,65 @@ namespace CampusCrates
             UpdateViewport();
             float time = Time.unscaledTime;
             if (guideMarker.gameObject.activeInHierarchy)
-                guideArrow.anchoredPosition = Vector2.up * (5f * Mathf.Sin(time * 6f));
+                guideArrow.anchoredPosition = Vector2.up * (7f * Mathf.Abs(Mathf.Sin(time * 4.2f)));
 
             if (homeCrate != null && homeScreen.gameObject.activeSelf)
-            {
-                homeCrate.anchoredPosition = Vector2.up * (4f * Mathf.Sin(time * 1.9f));
-                homeCrate.localRotation = Quaternion.Euler(0f, 0f, .65f * Mathf.Sin(time * 1.6f));
-            }
+                AnimateHome(time);
 
             if (mapScreen.gameObject.activeSelf)
                 AnimateTrail(time);
-            if (gameScreen.gameObject.activeSelf && lastPackAt >= 0f)
+            UpdateCoins();
+            if (roomScreen.gameObject.activeSelf)
+                AnimateRoom(time);
+
+            if (!gameScreen.gameObject.activeSelf)
+                return;
+
+            UpdateTray(time);
+            PulseHighlight(time);
+            if (lastPackAt >= 0f)
             {
-                float t = Mathf.Clamp01((time - lastPackAt) / .34f);
-                crateBadge.localScale = Vector3.one * (1f + .16f * Mathf.Sin(t * Mathf.PI));
+                float t = Mathf.Clamp01((time - lastPackAt) / .38f);
+                crateBadge.localScale = Vector3.one * (1f + .2f * Mathf.Sin(t * Mathf.PI) * (1f - .4f * t));
                 if (t >= 1f)
+                {
+                    crateBadge.localScale = Vector3.one;
                     lastPackAt = -1f;
+                }
             }
-            if (completionCard.gameObject.activeInHierarchy)
+            UpdateResultGate(time);
+        }
+
+        private void AnimateHome(float time)
+        {
+            homeCrate.anchoredPosition = Vector2.up * (9f * Mathf.Sin(time * 1.9f));
+            homeCrate.localRotation = Quaternion.Euler(0f, 0f, 1.6f * Mathf.Sin(time * 1.6f));
+            if (homeGlow != null)
             {
-                float t = Mathf.Clamp01((time - resultOpenedAt) / .38f);
-                float scale = Mathf.Lerp(.84f, 1f, Mathf.SmoothStep(0f, 1f, t)) + .12f * Mathf.Sin(t * Mathf.PI);
-                resultPanel.localScale = Vector3.one * scale;
+                float breathe = .5f + .5f * Mathf.Sin(time * 1.9f);
+                homeGlow.rectTransform.localScale = Vector3.one * (.94f + .1f * breathe);
+                homeGlow.color = new Color(1f, .92f, .66f, .42f + .2f * breathe);
             }
+
+            for (int index = 0; index < homeTwinkles.Count; index++)
+            {
+                float phase = Mathf.Repeat(time * .55f + index * .27f, 1f);
+                float pop = Mathf.Sin(Mathf.Clamp01(phase / .35f) * Mathf.PI);
+                homeTwinkles[index].localScale = Vector3.one * pop;
+                homeTwinkles[index].localRotation = Quaternion.Euler(0f, 0f, phase * 90f);
+            }
+        }
+
+        private void PulseHighlight(float time)
+        {
+            if (highlightedCard == null || time < entranceEndsAt)
+                return;
+
+            float wave = .5f + .5f * Mathf.Sin(time * 6.5f);
+            highlightedCard.Button.transform.localScale = Vector3.one * (1f + .05f * wave);
+            Color glow = highlightedCard.HintOutline.effectColor;
+            glow.a = .45f + .55f * wave;
+            highlightedCard.HintOutline.effectColor = glow;
         }
 
         private void UpdateViewport()
@@ -225,11 +306,22 @@ namespace CampusCrates
 
         private void BuildHome()
         {
-            if (AddThemeArt(homeScreen, "Campus Crates wordmark", "wordmark", At(.050f, .705f, .950f, .955f), Fill) == null)
+            if (AddThemeArt(homeScreen, "Campus Crates wordmark", "wordmark", At(.050f, .690f, .950f, .925f), Fill) == null)
             {
                 var title = Label(homeScreen, "Game title", "Campus\nCrates", At(.06f, .718f, .94f, .947f), 107, Paper);
                 title.lineSpacing = .81f;
                 AddShade(title.gameObject, new Vector2(0, -6));
+            }
+
+            homeGlow = Panel(homeScreen, "Warm crate glow", At(-.08f, .25f, 1.08f, .75f), new Color(1f, .92f, .66f, .5f));
+            homeGlow.sprite = glowSprite;
+            Vector2[] twinkles = { new Vector2(.20f, .62f), new Vector2(.83f, .58f), new Vector2(.16f, .40f), new Vector2(.86f, .37f) };
+            foreach (Vector2 spot in twinkles)
+            {
+                Image twinkle = Panel(homeScreen, "Twinkle", Centered(spot, .07f, .07f * 752f / 1280f), new Color(1f, .97f, .82f, .95f));
+                twinkle.sprite = sparkleSprite;
+                twinkle.preserveAspect = true;
+                homeTwinkles.Add(twinkle.rectTransform);
             }
 
             homeCrate = Box(homeScreen, "Floating event crate", At(.13f, .320f, .87f, .674f));
@@ -241,14 +333,12 @@ namespace CampusCrates
                 SupplyIcon(crate, SupplyKind.Pencil, At(.56f, .16f, .88f, .86f));
             }
 
-            Button play = MakePackingButton(homeScreen, "Play", At(.12f, .174f, .88f, .278f), Gold);
-            Label(play.transform, "Text", "Play", At(.11f, .416f, .89f, .850f), 52, Ink);
-            homeLevelLabel = Label(play.transform, "Current level", "", At(.11f, .200f, .89f, .450f), 29, Ink, detail: true);
+            Button play = MakePackingButton(homeScreen, "Play", At(.12f, .176f, .88f, .282f), Gold);
+            ButtonText(play, "Play", At(.11f, .40f, .89f, .88f), 58, true);
+            homeLevelLabel = Headline(play.transform, "Current level", "", At(.11f, .19f, .89f, .46f), 28, TextWhite, StrokeBrown, 2.5f);
             play.onClick.AddListener(StartFromHome);
 
-            Button map = MakePackingButton(homeScreen, "Campus Map", At(.18f, .082f, .82f, .153f), Positive);
-            Label(map.transform, "Text", "Campus Map", At(.11f, .18f, .89f, .87f), 38, Paper);
-            map.onClick.AddListener(ShowMap);
+            BuildHomeMeta();
         }
 
         private void BuildMap()
@@ -260,10 +350,9 @@ namespace CampusCrates
             fitter.aspectMode = AspectRatioFitter.AspectMode.FitInParent;
             fitter.aspectRatio = .515f;
 
-            var mapPlate = Panel(column, "Trail print", At(.015f, .160f, .985f, .893f), BoardSurface, true).rectTransform;
-            AddShade(mapPlate.gameObject, new Vector2(0, -6));
+            var mapPlate = Sticker(column, "Trail print", At(.005f, .150f, .995f, .897f), Surface.Panel).rectTransform;
             var trailArt = AddThemeArt(mapPlate, "Illustrated campus trail", "campus-trail",
-                At(.010f, .006f, .990f, .994f), Fill, AspectRatioFitter.AspectMode.EnvelopeParent);
+                At(.030f, .040f, .970f, .975f), Fill, AspectRatioFitter.AspectMode.EnvelopeParent);
             Transform trail = trailArt != null ? trailArt.transform : mapPlate;
 
             for (int segment = 0; segment < trailDashes.Length; segment++)
@@ -285,8 +374,8 @@ namespace CampusCrates
             {
                 int number = index + 1;
                 Button stop = MakeArtButton(trail, $"Stop {number} / {StopNames[index]}",
-                    Centered(TrailStops[index], .158f, .158f * TrailArtAspect), "trail-pin", Fill, Gold);
-                Label(stop.transform, "Stop number", number.ToString(), At(.17f, .20f, .83f, .89f), 52, Ink);
+                    Centered(TrailStops[index], .158f, .158f * TrailArtAspect), "trail-pin", Fill, Gold, press: false);
+                Headline(stop.transform, "Stop number", number.ToString(), At(.17f, .20f, .83f, .89f), 54, StrokeTeal, TextWhite, 3f);
                 levelLocks[index] = DrawLock(stop.transform, At(.73f, .075f, .94f, .34f));
                 levelStamps[index] = SupplyIcon(stop.transform, SupplyKind.Badge, At(.64f, .04f, .97f, .37f));
                 levelButtons[index] = stop;
@@ -300,15 +389,14 @@ namespace CampusCrates
             trailParcel.gameObject.SetActive(false);
 
             Button back = MakeArtButton(column, "Back", At(.020f, .911f, .154f, .987f), "trail-pin", Fill, Gold);
-            Label(back.transform, "Back arrow", "‹", At(.17f, .20f, .83f, .89f), 58, Ink);
+            Headline(back.transform, "Back arrow", "‹", At(.17f, .20f, .83f, .89f), 58, Ink, TextWhite, 3f).font = font;
             back.onClick.AddListener(ShowHome);
-            var title = Label(column, "Map title", "Festival Trail", At(.18f, .907f, .82f, .991f), 60, Paper);
-            AddShade(title.gameObject, new Vector2(0, -3));
+            Ribbon(column, "Map ribbon", "Festival Trail", At(.16f, .900f, .84f, .999f), 50);
 
-            var deliveryTag = Panel(column, "Festival ticket", At(.015f, .024f, .985f, .142f), BoardSurface, true).rectTransform;
-            AddShade(deliveryTag.gameObject, new Vector2(0, -6));
+            var deliveryTag = Sticker(column, "Festival ticket", At(.005f, .012f, .995f, .148f), Surface.Panel).rectTransform;
             mapBooth = BuildBoothArt(deliveryTag, At(.035f, .09f, .238f, .91f));
             nextStop = Label(deliveryTag, "Next stop", "", At(.270f, .46f, .944f, .86f), 37, Positive, TextAnchor.MiddleLeft);
+            nextStop.font = titleFont;
             standProgress = Label(deliveryTag, "Stand progress", "", At(.270f, .15f, .944f, .47f), 29, Ink,
                 TextAnchor.MiddleLeft, detail: true);
         }
@@ -396,8 +484,30 @@ namespace CampusCrates
             if (parcelSegment >= 0)
                 Place(trailParcel, Centered(TrailStops[parcelSegment], .109f, .062f));
             trailParcel.gameObject.SetActive(parcelSegment >= 0);
-            homeScreen.gameObject.SetActive(false);
-            mapScreen.gameObject.SetActive(true);
+            ShowScreen(mapScreen);
+        }
+
+        private void ShowScreen(RectTransform screen)
+        {
+            homeScreen.gameObject.SetActive(screen == homeScreen);
+            mapScreen.gameObject.SetActive(screen == mapScreen);
+            gameScreen.gameObject.SetActive(screen == gameScreen);
+            if (roomScreen != null)
+                roomScreen.gameObject.SetActive(screen == roomScreen);
+
+            var group = screen.GetComponent<CanvasGroup>();
+            if (group == null)
+                group = screen.gameObject.AddComponent<CanvasGroup>();
+            screenFade.TryCancel();
+            group.alpha = 0f;
+            screenFade = LMotion.Create(0f, 1f, .24f)
+                .WithEase(Ease.OutCubic)
+                .Bind(t =>
+                {
+                    group.alpha = t;
+                    screen.localScale = Vector3.one * Mathf.Lerp(1.035f, 1f, t);
+                })
+                .AddTo(screen.gameObject);
         }
 
         private void AnimateTrail(float time)
@@ -425,8 +535,7 @@ namespace CampusCrates
         private void BuildGame()
         {
             AddThemeArt(gameScreen, "Level badge", "mint-button", At(.284f, .915f, .716f, .99f), MintButtonArtworkCrop);
-            levelLabel = Label(gameScreen, "Level", "", At(.307f, .926f, .693f, .98f), 35, Paper);
-            AddShade(levelLabel.gameObject, new Vector2(0, -3));
+            levelLabel = Headline(gameScreen, "Level", "", At(.307f, .926f, .693f, .98f), 37, TextWhite, StrokeTeal, 3f);
             Button gear = MakeButton(gameScreen, "Settings", At(.764f, .908f, .956f, .999f), Color.clear);
             RawImage gearArt = AddThemeArt(gear.transform, "Settings gear", "settings", Fill, Fill);
             if (gearArt != null)
@@ -435,36 +544,43 @@ namespace CampusCrates
                 Label(gear.transform, "Settings label", "Settings", Fill, 24, Paper);
             gear.onClick.AddListener(() => SetSettingsOpen(true));
 
-            crateBadge = Panel(gameScreen, "Packed crates badge", At(.342f, .838f, .658f, .907f), BoardSurface, true).rectTransform;
-            AddShade(crateBadge.gameObject, new Vector2(0, -5));
-            AddThemeArt(crateBadge, "Crate icon", "event-crate", At(.045f, -.055f, .49f, 1.06f), Fill);
-            crateCount = Label(crateBadge, "Crates packed", "", At(.44f, .085f, .94f, .95f), 39, Positive);
+            crateBadge = Sticker(gameScreen, "Packed crates badge", At(.330f, .834f, .670f, .911f)).rectTransform;
+            RawImage crateArt = AddThemeArt(crateBadge, "Crate icon", "event-crate", At(.045f, -.055f, .49f, 1.06f), Fill);
+            crateIcon = crateArt != null ? (RectTransform)crateArt.transform.parent : crateBadge;
+            crateCount = Label(crateBadge, "Crates packed", "", At(.44f, .12f, .90f, .88f), 39, Positive);
+            crateCount.font = titleFont;
+
+            // A soft translucent mat separates the cream tiles from the sunny courtyard floor.
+            Image mat = Panel(gameScreen, "Play mat", At(.022f, .372f, .978f, .846f), PlayMat, true);
+            mat.pixelsPerUnitMultiplier = .38f;
+            var matEdge = mat.gameObject.AddComponent<Outline>();
+            matEdge.effectColor = new Color(1f, .97f, .88f, .22f);
+            matEdge.effectDistance = new Vector2(3f, -3f);
 
             stackArea = Box(gameScreen, "Tile stacks", Fill);
 
-            var guideTag = Panel(gameScreen, "Opening guide", At(.18f, .760f, .82f, .815f), BoardSurface, true);
-            AddShade(guideTag.gameObject, new Vector2(0, -4));
-            guide = Label(guideTag.transform, "Next move", "Tap 3 notebooks", At(.03f, .04f, .97f, .96f), 29, Ink);
+            var guideTag = Sticker(gameScreen, "Opening guide", At(.16f, .752f, .84f, .822f));
+            guide = Label(guideTag.transform, "Next move", "Tap 3 notebooks", At(.06f, .14f, .94f, .86f), 31, Ink);
+            guide.font = titleFont;
             guideMarker = Box(gameScreen, "Guide marker", Fill);
-            var arrow = Label(guideMarker, "Guide arrow", "▼", Fill, 54, Gold);
-            arrow.font = legacyFont;
-            AddShade(arrow.gameObject, new Vector2(0, -5));
-            guideArrow = arrow.rectTransform;
+            guideArrow = IconImage(guideMarker, "Guide arrow", "arrow", Fill).rectTransform;
 
-            Panel(gameScreen, "Tray capacity tag", At(.753f, .332f, .935f, .383f), DarkGlass, true);
-            trayCount = Label(gameScreen, "Tray capacity", "", At(.758f, .334f, .930f, .381f), 29, Gold);
-            if (AddThemeArt(gameScreen, "Cardboard sorting tray", "packing-tray", At(.033f, .193f, .967f, .334f),
+            trayGroup = Box(gameScreen, "Tray group", Fill);
+            Sticker(trayGroup, "Tray capacity tag", At(.745f, .328f, .945f, .388f), Surface.PillTeal);
+            trayCount = Headline(trayGroup, "Tray capacity", "", At(.765f, .337f, .925f, .381f), 29, TextWhite, StrokeTeal, 2f);
+            if (AddThemeArt(trayGroup, "Cardboard sorting tray", "packing-tray", At(.033f, .193f, .967f, .334f),
                 TrayArtworkCrop, AspectRatioFitter.AspectMode.None) == null)
-                Panel(gameScreen, "Tray", At(.04f, .202f, .96f, .333f), TableEdge, true);
+                Panel(trayGroup, "Tray", At(.04f, .202f, .96f, .333f), TableEdge, true);
             for (int index = 0; index < slots.Length; index++)
             {
                 float left = .073f + index * .123f;
-                slots[index] = Panel(gameScreen, $"Slot {index + 1}", At(left, .224f, left + .108f, .305f), TrayRecess, true);
+                slots[index] = Panel(trayGroup, $"Slot {index + 1}", At(left, .224f, left + .108f, .305f), TrayRecess, true);
             }
+            trayLayer = Box(trayGroup, "Tray items", Fill);
 
-            var note = Panel(gameScreen, "Feedback surface", At(.23f, .092f, .77f, .151f), BoardSurface, true);
-            AddShade(note.gameObject, new Vector2(0, -4));
-            feedback = Label(note.transform, "Feedback", "", At(.06f, .08f, .94f, .92f), 30, Ink, detail: true);
+            var note = Sticker(gameScreen, "Feedback surface", At(.23f, .088f, .77f, .156f));
+            feedback = Label(note.transform, "Feedback", "", At(.08f, .14f, .92f, .86f), 30, Ink);
+            feedback.font = titleFont;
 
             hintButton = MakeButton(gameScreen, "Hint", At(.044f, .078f, .203f, .164f), Color.clear);
             RawImage bulb = AddThemeArt(hintButton.transform, "Hint light bulb", "hint", Fill, Fill);
@@ -477,32 +593,37 @@ namespace CampusCrates
             }
             hintButton.onClick.AddListener(ShowMatchHint);
 
+            effectsLayer = Box(gameScreen, "Effects", Fill);
             BuildCompletionCard();
         }
 
         private void BuildCompletionCard()
         {
-            completionCard = Panel(gameScreen, "Celebration tint", Fill, new Color32(25, 42, 39, 72)).rectTransform;
-            var card = Panel(completionCard, "Packed result", At(.055f, .360f, .945f, .817f),
-                new Color32(255, 248, 227, 234), true).rectTransform;
+            completionTint = Panel(gameScreen, "Celebration tint", Fill, new Color32(18, 36, 34, 150));
+            completionCard = completionTint.rectTransform;
+            var card = Sticker(completionCard, "Packed result", At(.045f, .362f, .955f, .800f), Surface.Panel).rectTransform;
             resultPanel = card;
-            AddShade(card.gameObject, new Vector2(0, -12));
 
-            completionTitle = Label(card, "Title", "", At(.06f, .806f, .94f, .976f), 54, Positive);
-            Panel(card, "Illustration backdrop", At(.20f, .333f, .80f, .789f), new Color32(250, 218, 150, 122), true);
-            Rect artBounds = At(.17f, .315f, .83f, .816f);
+            Image warmth = Panel(card, "Illustration glow", At(.10f, .24f, .90f, .86f), new Color(1f, .84f, .52f, .75f));
+            warmth.sprite = glowSprite;
+            Rect artBounds = At(.21f, .375f, .79f, .800f);
             crateArtwork = AddThemeArt(card, "Packed event crate", "event-crate", artBounds, Fill);
             retryArtwork = AddThemeArt(card, "Overflowing tray", "tray-full", artBounds, Fill);
             resultBooth = BuildBoothArt(card, artBounds);
-            var leftSparkle = Panel(card, "Left sparkle", At(.128f, .609f, .177f, .655f), Peach, true);
-            leftSparkle.rectTransform.localRotation = Quaternion.Euler(0f, 0f, 45f);
-            var rightSparkle = Panel(card, "Right sparkle", At(.810f, .683f, .855f, .725f), Gold, true);
-            rightSparkle.rectTransform.localRotation = Quaternion.Euler(0f, 0f, 45f);
-            completionResult = Label(card, "Result", "", At(.07f, .223f, .93f, .334f), 34, Ink, detail: true);
+            var leftSparkle = Panel(card, "Left sparkle", At(.10f, .58f, .19f, .69f), new Color32(255, 190, 160, 255));
+            leftSparkle.sprite = sparkleSprite;
+            leftSparkle.preserveAspect = true;
+            var rightSparkle = Panel(card, "Right sparkle", At(.80f, .66f, .87f, .75f), new Color32(255, 220, 120, 255));
+            rightSparkle.sprite = sparkleSprite;
+            rightSparkle.preserveAspect = true;
+            completionResult = Label(card, "Result", "", At(.07f, .300f, .93f, .380f), 32, Ink);
+            completionResult.font = titleFont;
 
-            Button next = MakePackingButton(card, "Continue", At(.10f, .045f, .90f, .227f), Gold);
-            completionAction = Label(next.transform, "Text", "", At(.08f, .12f, .92f, .94f), 38, Ink);
+            Button next = MakePackingButton(card, "Continue", At(.10f, .040f, .90f, .200f), Gold);
+            completionAction = ButtonText(next, "", At(.08f, .14f, .92f, .92f), 42, true);
             next.onClick.AddListener(ContinueFromResults);
+            completionTitle = Ribbon(card, "Result ribbon", "", At(-.07f, .80f, 1.07f, 1.07f), 50);
+            BuildResultReward();
         }
 
         private void BuildSettings()
@@ -510,30 +631,45 @@ namespace CampusCrates
             var backdrop = Panel(viewport, "Settings overlay", Fill, new Color32(12, 30, 33, 179));
             backdrop.raycastTarget = true;
             settings = backdrop.rectTransform;
-            var dialog = Panel(settings, "Settings dialog", At(.105f, .286f, .895f, .743f), BoardSurface, true).rectTransform;
-            AddShade(dialog.gameObject, new Vector2(0, -9));
-            Label(dialog, "Title", "Settings", At(.08f, .76f, .92f, .96f), 52, Ink);
+            settingsGroup = backdrop.gameObject.AddComponent<CanvasGroup>();
+            var dialog = Sticker(settings, "Settings dialog", At(.095f, .286f, .905f, .723f), Surface.Panel).rectTransform;
+            settingsDialog = dialog;
+            Ribbon(dialog, "Settings ribbon", "Settings", At(-.08f, .80f, 1.08f, 1.10f), 50);
 
-            Button resume = MakePackingButton(dialog, "Resume", At(.10f, .54f, .90f, .72f), Gold);
-            Label(resume.transform, "Text", "Resume", Fill, 36, Ink);
+            Button resume = MakePackingButton(dialog, "Resume", At(.12f, .56f, .88f, .76f), Gold);
+            ButtonText(resume, "Resume", At(.08f, .14f, .92f, .90f), 40, true);
             resume.onClick.AddListener(() => SetSettingsOpen(false));
 
-            Button restart = MakePackingButton(dialog, "Restart", At(.10f, .32f, .90f, .50f), Positive);
-            Label(restart.transform, "Text", "Restart", Fill, 36, Paper);
+            Button restart = MakePackingButton(dialog, "Restart", At(.12f, .33f, .88f, .52f), Positive);
+            ButtonText(restart, "Restart", At(.08f, .14f, .92f, .90f), 38, false);
             restart.onClick.AddListener(Restart);
 
-            Button home = MakePackingButton(dialog, "Main Menu", At(.10f, .10f, .90f, .28f), Positive);
-            Label(home.transform, "Text", "Main Menu", Fill, 36, Paper);
+            Button home = MakePackingButton(dialog, "Main Menu", At(.12f, .10f, .88f, .29f), Positive);
+            ButtonText(home, "Main Menu", At(.08f, .14f, .92f, .90f), 38, false);
             home.onClick.AddListener(ShowHome);
         }
 
         private void SetSettingsOpen(bool open)
         {
+            bool opening = open && !settings.gameObject.activeSelf;
             settings.gameObject.SetActive(open);
             gameControls.interactable = !open;
             gameControls.blocksRaycasts = !open;
             if (EventSystem.current != null)
                 EventSystem.current.SetSelectedGameObject(null);
+
+            settingsFade.TryCancel();
+            if (!opening)
+                return;
+            settingsGroup.alpha = 0f;
+            settingsDialog.localScale = Vector3.one * .86f;
+            settingsFade = LMotion.Create(0f, 1f, .32f)
+                .Bind(t =>
+                {
+                    settingsGroup.alpha = Mathf.Clamp01(t * 3f);
+                    settingsDialog.localScale = Vector3.one * Mathf.LerpUnclamped(.86f, 1f, OutBack(t));
+                })
+                .AddTo(settings.gameObject);
         }
 
         private void StartFromHome()
@@ -546,18 +682,16 @@ namespace CampusCrates
             if (number > campusProgress.UnlockedLevel)
                 return;
 
+            ShowScreen(gameScreen);
             if (number == level)
                 Restart();
             else
                 LoadLevel(number);
-            homeScreen.gameObject.SetActive(false);
-            mapScreen.gameObject.SetActive(false);
-            gameScreen.gameObject.SetActive(true);
         }
 
         private void LoadLevel(int number)
         {
-            CancelFlight();
+            ClearTrayAndEffects();
             foreach (Transform tile in stackArea)
             {
                 tile.gameObject.SetActive(false);
@@ -614,11 +748,9 @@ namespace CampusCrates
         private void ShowHome()
         {
             SetSettingsOpen(false);
-            CancelFlight();
-            gameScreen.gameObject.SetActive(false);
-            mapScreen.gameObject.SetActive(false);
             homeLevelLabel.text = $"Level {campusProgress.UnlockedLevel}";
-            homeScreen.gameObject.SetActive(true);
+            RefreshHomeMeta();
+            ShowScreen(homeScreen);
         }
 
         private void CreateColumn(Transform parent, int column, int offset)
@@ -657,7 +789,6 @@ namespace CampusCrates
                 float y = .5f + tile.Y * ShapeLevel.Pitch;
                 var bounds = At(x - halfTile, y - halfTile, x + halfTile, y + halfTile);
                 CardDisplay card = CreateTile(square, $"Tile {index + 1} / {tile.Kind}", tile.Kind, bounds);
-                card.Shade = card.Button.gameObject.AddComponent<CanvasGroup>();
                 tileCards[index] = card;
                 card.Button.onClick.AddListener(() => Select(card, tile.Kind, tileIndex));
             }
@@ -665,7 +796,7 @@ namespace CampusCrates
 
         private CardDisplay CreateTile(Transform parent, string name, SupplyKind kind, Rect bounds)
         {
-            Button button = MakeButton(parent, name, bounds, CoveredTile);
+            Button button = MakeButton(parent, name, bounds, BlockedFace, press: false);
             if (tileFace != null)
             {
                 button.image.sprite = tileFace;
@@ -674,82 +805,446 @@ namespace CampusCrates
             var shadow = button.gameObject.AddComponent<Shadow>();
             shadow.effectColor = new Color(0.08f, 0.14f, 0.13f, .48f);
             shadow.effectDistance = new Vector2(0, -9);
+            RectTransform icon = SupplyIcon(button.transform, kind, At(.105f, .12f, .895f, .935f));
             return new CardDisplay
             {
                 Button = button,
-                Icon = SupplyIcon(button.transform, kind, At(.105f, .12f, .895f, .935f))
+                Icon = icon,
+                IconImage = icon.GetComponentInChildren<Image>()
             };
         }
 
         private void Select(CardDisplay card, SupplyKind kind, int tile)
         {
             int packedBefore = board.CratesPacked;
-            int slot = board.Tray.Count;
-            if (flyingCard != null || !board.TrySelect(tile))
+            if (!board.TrySelect(tile))
                 return;
 
-            if (board.Status == PackingStatus.Won && campusProgress.Complete(level))
+            if (board.Status == PackingStatus.Won)
             {
-                deliveryEarned = level <= CampusProgress.DeliveriesNeeded;
-                PlayerPrefs.SetInt(CompletedLevelKey, campusProgress.HighestCompleted);
-                PlayerPrefs.Save();
+                bool firstClear = campusProgress.Complete(level);
+                if (firstClear)
+                {
+                    deliveryEarned = level <= CampusProgress.DeliveriesNeeded;
+                    PlayerPrefs.SetInt(CompletedLevelKey, campusProgress.HighestCompleted);
+                }
+                AwardLevelCoins(firstClear);
             }
 
             ClearHighlight();
-            var source = (RectTransform)card.Button.transform;
             guideMarker.gameObject.SetActive(false);
-            var destination = slots[slot].rectTransform;
-            Vector3 from = gameScreen.InverseTransformPoint(source.TransformPoint(source.rect.center));
-            Vector3 to = gameScreen.InverseTransformPoint(destination.TransformPoint(destination.rect.center));
-            Vector2 startSize = source.rect.size;
-            Vector2 endSize = destination.rect.size;
+            var source = (RectTransform)card.Button.transform;
+            Vector2 from = trayLayer.InverseTransformPoint(source.TransformPoint(source.rect.center));
+            SpawnTilePop(source);
 
-            flyingCard = Box(gameScreen, "Moving supply", Fill);
-            flyingCard.anchorMin = flyingCard.anchorMax = new Vector2(.5f, .5f);
-            flyingCard.sizeDelta = startSize;
-            flyingCard.localPosition = from;
-            SupplyIcon(flyingCard, kind, At(.10f, .06f, .90f, .94f));
-            source.gameObject.SetActive(false);
+            var item = new TrayItem
+            {
+                Kind = kind,
+                Flying = true,
+                Start = Time.unscaledTime,
+                From = from,
+                FromSize = source.rect.size * .86f,
+                CompletesTrio = board.CratesPacked > packedBefore
+            };
+            item.Rect = Box(trayLayer, kind + " in tray", Fill);
+            item.Rect.anchorMin = item.Rect.anchorMax = new Vector2(.5f, .5f);
+            item.Rect.sizeDelta = item.FromSize;
+            item.Rect.localPosition = from;
+            SupplyIcon(item.Rect, kind, At(-.05f, -.05f, 1.05f, 1.05f));
 
-            cardFlight = LMotion.Create(0f, 1f, .19f)
-                .WithEase(Ease.OutQuad)
-                .WithOnComplete(() => CompleteSelection(packedBefore))
-                .Bind(progress =>
-                {
-                    float arc = Mathf.Sin(progress * Mathf.PI);
-                    flyingCard.localPosition = Vector3.LerpUnclamped(from, to, progress) + Vector3.up * (55f * arc);
-                    flyingCard.localRotation = Quaternion.Euler(0f, 0f, 10f * arc);
-                    flyingCard.sizeDelta = Vector2.LerpUnclamped(startSize, endSize, progress);
-                });
-        }
+            // Like kinds sit together, so a forming trio is easy to read at a glance.
+            int insert = trayItems.FindLastIndex(other => other.Kind == kind);
+            trayItems.Insert(insert < 0 ? trayItems.Count : insert + 1, item);
 
-        private void CompleteSelection(int packedBefore)
-        {
-            RemoveFlyingCard();
-            if (board.CratesPacked > packedBefore)
-                lastPackAt = Time.unscaledTime;
-            if (board.Status != PackingStatus.Playing)
-                SetFeedback("", Ink);
-            else if (board.CratesPacked > packedBefore)
-                SetFeedback("+1 crate", Positive);
-            else if (board.Tray.Count == PackingBoard.TrayCapacity - 1)
+            if (board.Status == PackingStatus.Playing && board.Tray.Count == PackingBoard.TrayCapacity - 1)
                 SetFeedback("1 slot left", Error);
             else
                 SetFeedback("", Ink);
-
             Refresh();
         }
 
         private void Restart()
         {
             SetSettingsOpen(false);
-            CancelFlight();
+            ClearTrayAndEffects();
             board.Reset();
             lastPackAt = -1f;
+            displayedCrates = 0;
+            resultDueAt = -1f;
             crateBadge.localScale = Vector3.one;
+            trayGroup.anchoredPosition = Vector2.zero;
+            foreach (Image slot in slots)
+                slot.color = TrayRecess;
             deliveryEarned = false;
             SetFeedback("", Ink);
-            Refresh();
+            if (tileCards != null)
+                foreach (CardDisplay card in tileCards)
+                    if (card != null)
+                        card.WasReady = null;
+            Refresh(instant: true);
+            PlayEntrance();
+        }
+
+        private void PlayEntrance()
+        {
+            int order = 0;
+            foreach (CardDisplay card in tileCards)
+            {
+                if (card == null || !card.Button.gameObject.activeSelf)
+                    continue;
+                var rect = (RectTransform)card.Button.transform;
+                rect.localScale = Vector3.zero;
+                card.Anim.TryCancel();
+                card.Anim = LMotion.Create(0f, 1f, .36f)
+                    .WithEase(Ease.OutBack)
+                    .WithDelay(.08f + order * .03f)
+                    .Bind(scale => rect.localScale = Vector3.one * scale)
+                    .AddTo(rect.gameObject);
+                order++;
+            }
+            entranceEndsAt = Time.unscaledTime + .08f + order * .03f + .36f;
+        }
+
+        // ---------- Tray: flight, sliding, merging ----------
+
+        private Vector2 SlotPosition(int index)
+        {
+            Vector2 Center(int slot)
+            {
+                RectTransform rect = slots[slot].rectTransform;
+                return trayLayer.InverseTransformPoint(rect.TransformPoint(rect.rect.center));
+            }
+
+            if (index < slots.Length)
+                return Center(index);
+            Vector2 last = Center(slots.Length - 1);
+            return last + (last - Center(slots.Length - 2)) * (index - slots.Length + 1);
+        }
+
+        private void UpdateTray(float time)
+        {
+            if (trayItems.Count == 0)
+            {
+                UpdateTrayCount();
+                return;
+            }
+
+            Vector2 slotSize = slots[0].rectTransform.rect.size;
+            float follow = 1f - Mathf.Exp(-22f * Time.unscaledDeltaTime);
+            List<TrayItem> landed = null;
+            for (int index = 0; index < trayItems.Count; index++)
+            {
+                TrayItem item = trayItems[index];
+                Vector2 target = SlotPosition(index);
+                if (!item.Flying)
+                {
+                    item.Rect.localPosition = Vector2.Lerp(item.Rect.localPosition, target, follow);
+                    continue;
+                }
+
+                float t = Mathf.Clamp01((time - item.Start) / FlightTime);
+                float eased = OutCubic(t);
+                float arc = Mathf.Sin(t * Mathf.PI);
+                item.Rect.localPosition = Vector2.LerpUnclamped(item.From, target, eased) + Vector2.up * (70f * arc);
+                item.Rect.sizeDelta = Vector2.LerpUnclamped(item.FromSize, slotSize, eased);
+                item.Rect.localRotation = Quaternion.Euler(0f, 0f, -14f * arc);
+                if (t < 1f)
+                    continue;
+
+                item.Flying = false;
+                item.Rect.localRotation = Quaternion.identity;
+                (landed ??= new List<TrayItem>()).Add(item);
+            }
+
+            if (landed != null)
+                foreach (TrayItem item in landed)
+                    Land(item);
+            UpdateTrayCount();
+        }
+
+        private void UpdateTrayCount()
+        {
+            if (shownTrayCount == trayItems.Count)
+                return;
+            shownTrayCount = trayItems.Count;
+            trayCount.text = $"{shownTrayCount} / {PackingBoard.TrayCapacity}";
+            trayCount.color = shownTrayCount >= PackingBoard.TrayCapacity - 1 ? new Color32(255, 196, 170, 255) : TextWhite;
+        }
+
+        private void Land(TrayItem item)
+        {
+            RectTransform rect = item.Rect;
+            item.Punch.TryCancel();
+            item.Punch = LMotion.Create(0f, 1f, .3f)
+                .Bind(t => rect.localScale = new Vector3(1.24f - .24f * OutBack(t), .8f + .2f * OutBack(t), 1f))
+                .AddTo(rect.gameObject);
+
+            if (item.CompletesTrio)
+                StartMerge(item);
+        }
+
+        private void StartMerge(TrayItem completing)
+        {
+            var trio = new List<TrayItem> { completing };
+            foreach (TrayItem other in trayItems)
+                if (other != completing && other.Kind == completing.Kind && !other.Flying && trio.Count < 3)
+                    trio.Add(other);
+
+            var starts = new Vector2[trio.Count];
+            Vector2 center = Vector2.zero;
+            for (int index = 0; index < trio.Count; index++)
+            {
+                trayItems.Remove(trio[index]);
+                trio[index].Punch.TryCancel();
+                trio[index].Rect.SetAsLastSibling();
+                starts[index] = trio[index].Rect.localPosition;
+                center += starts[index];
+            }
+            center = center / trio.Count + Vector2.up * 30f;
+
+            activeMerges++;
+            SupplyKind kind = completing.Kind;
+            effectMotions.Add(LMotion.Create(0f, 1f, .36f)
+                .WithOnComplete(() =>
+                {
+                    foreach (TrayItem item in trio)
+                        if (item.Rect != null)
+                            Destroy(item.Rect.gameObject);
+                    Vector2 burstAt = effectsLayer.InverseTransformPoint(trayLayer.TransformPoint(center));
+                    Burst(burstAt, KindColor(kind), 1f);
+                    FlyCrateToBadge(burstAt);
+                })
+                .Bind(p =>
+                {
+                    for (int index = 0; index < trio.Count; index++)
+                    {
+                        RectTransform rect = trio[index].Rect;
+                        if (p < .45f)
+                        {
+                            float q = OutCubic(p / .45f);
+                            rect.localPosition = Vector2.LerpUnclamped(starts[index], center, q);
+                            rect.localScale = Vector3.one * (1f + .2f * q);
+                        }
+                        else
+                        {
+                            float q = (p - .45f) / .55f;
+                            rect.localPosition = center;
+                            rect.localScale = Vector3.one * Mathf.Max(0f, 1.2f * (1f - InBack(q)));
+                        }
+                    }
+                }));
+        }
+
+        private void FlyCrateToBadge(Vector2 from)
+        {
+            Vector2 to = effectsLayer.InverseTransformPoint(crateIcon.TransformPoint(crateIcon.rect.center));
+            var crate = Box(effectsLayer, "Packed crate", Fill);
+            crate.anchorMin = crate.anchorMax = new Vector2(.5f, .5f);
+            crate.sizeDelta = Vector2.one * 120f;
+            crate.localPosition = from;
+            if (AddThemeArt(crate, "Crate", "event-crate", Fill, Fill) == null)
+                Panel(crate, "Crate", At(.15f, .15f, .85f, .85f), Gold, true);
+
+            effectMotions.Add(LMotion.Create(0f, 1f, .52f)
+                .WithOnComplete(() =>
+                {
+                    Destroy(crate.gameObject);
+                    displayedCrates = Mathf.Min(displayedCrates + 1, board.CratesPacked);
+                    crateCount.text = $"{displayedCrates} / {board.TotalCrates}";
+                    lastPackAt = Time.unscaledTime;
+                    Burst(to, Gold, .55f);
+                    activeMerges = Mathf.Max(0, activeMerges - 1);
+                })
+                .Bind(t =>
+                {
+                    float eased = InOutCubic(t);
+                    crate.localPosition = Vector2.LerpUnclamped(from, to, eased) + Vector2.up * (110f * Mathf.Sin(t * Mathf.PI));
+                    float grow = t < .25f ? OutBack(t / .25f) : Mathf.Lerp(1f, .55f, (t - .25f) / .75f);
+                    crate.localScale = Vector3.one * Mathf.Max(0f, grow);
+                    crate.localRotation = Quaternion.Euler(0f, 0f, 18f * Mathf.Sin(t * Mathf.PI * 2f));
+                }));
+        }
+
+        private void SpawnTilePop(RectTransform source)
+        {
+            Vector2 at = effectsLayer.InverseTransformPoint(source.TransformPoint(source.rect.center));
+            Image ghost = Panel(effectsLayer, "Tile pop", Fill, Color.white);
+            ghost.sprite = tileFace != null ? tileFace : roundedTile;
+            ghost.type = Image.Type.Simple;
+            RectTransform rect = ghost.rectTransform;
+            rect.anchorMin = rect.anchorMax = new Vector2(.5f, .5f);
+            rect.sizeDelta = source.rect.size;
+            rect.localPosition = at;
+            effectMotions.Add(LMotion.Create(0f, 1f, .2f)
+                .WithOnComplete(() => Destroy(rect.gameObject))
+                .Bind(t =>
+                {
+                    rect.localScale = Vector3.one * (1f + .25f * OutCubic(t));
+                    ghost.color = new Color(1f, 1f, 1f, 1f - t);
+                }));
+        }
+
+        private void Burst(Vector2 at, Color tint, float size) => BurstIn(effectsLayer, effectMotions, at, tint, size);
+
+        private void BurstIn(RectTransform layer, List<MotionHandle> motions, Vector2 at, Color tint, float size)
+        {
+            Image ring = Panel(layer, "Burst glow", Fill, tint);
+            ring.sprite = glowSprite;
+            RectTransform ringRect = ring.rectTransform;
+            ringRect.anchorMin = ringRect.anchorMax = new Vector2(.5f, .5f);
+            ringRect.localPosition = at;
+            motions.Add(LMotion.Create(0f, 1f, .45f)
+                .WithOnComplete(() => Destroy(ringRect.gameObject))
+                .Bind(t =>
+                {
+                    ringRect.sizeDelta = Vector2.one * Mathf.Lerp(70f, 300f, OutCubic(t)) * size;
+                    ring.color = new Color(tint.r, tint.g, tint.b, .9f * (1f - t));
+                }));
+
+            int count = Mathf.RoundToInt(9 * size) + 1;
+            for (int index = 0; index < count; index++)
+            {
+                Image spark = Panel(layer, "Sparkle", Fill, index % 2 == 0 ? Color.white : tint);
+                spark.sprite = sparkleSprite;
+                RectTransform rect = spark.rectTransform;
+                rect.anchorMin = rect.anchorMax = new Vector2(.5f, .5f);
+                rect.localPosition = at;
+                float angle = (index + Random.value * .6f) / count * Mathf.PI * 2f;
+                Vector2 direction = new Vector2(Mathf.Cos(angle), Mathf.Sin(angle));
+                float distance = Random.Range(85f, 150f) * size;
+                float spin = Random.Range(-200f, 200f);
+                float startSize = Random.Range(34f, 52f) * Mathf.Sqrt(size);
+                Color color = spark.color;
+                motions.Add(LMotion.Create(0f, 1f, Random.Range(.42f, .6f))
+                    .WithOnComplete(() => Destroy(rect.gameObject))
+                    .Bind(t =>
+                    {
+                        rect.localPosition = at + direction * (distance * OutCubic(t));
+                        rect.sizeDelta = Vector2.one * startSize * (1f - .7f * t);
+                        rect.localRotation = Quaternion.Euler(0f, 0f, spin * t);
+                        spark.color = new Color(color.r, color.g, color.b, 1f - t * t);
+                    }));
+            }
+        }
+
+        private void ClearTrayAndEffects()
+        {
+            foreach (MotionHandle handle in effectMotions)
+                handle.TryCancel();
+            effectMotions.Clear();
+            foreach (TrayItem item in trayItems)
+                item.Punch.TryCancel();
+            trayItems.Clear();
+            activeMerges = 0;
+            shownTrayCount = -1;
+            if (trayLayer != null)
+                foreach (Transform child in trayLayer)
+                    Destroy(child.gameObject);
+            if (effectsLayer != null)
+                foreach (Transform child in effectsLayer)
+                    Destroy(child.gameObject);
+            if (completionCard != null)
+                foreach (Transform child in completionCard)
+                    if (child.name == "Confetti")
+                        Destroy(child.gameObject);
+        }
+
+        private static Color KindColor(SupplyKind kind) => kind switch
+        {
+            SupplyKind.Notebook => new Color32(112, 214, 164, 255),
+            SupplyKind.Pencil => new Color32(255, 204, 70, 255),
+            SupplyKind.Cup => new Color32(196, 156, 246, 255),
+            _ => new Color32(255, 128, 104, 255)
+        };
+
+        // ---------- Result ----------
+
+        private void UpdateResultGate(float time)
+        {
+            if (board.Status == PackingStatus.Playing || completionCard.gameObject.activeSelf)
+                return;
+            if (activeMerges > 0 || trayItems.Exists(item => item.Flying))
+                return;
+
+            bool lost = board.Status == PackingStatus.Lost;
+            if (resultDueAt < 0f)
+            {
+                resultDueAt = time + (lost ? .75f : .3f);
+                if (lost)
+                    ShakeTray();
+                return;
+            }
+            if (time >= resultDueAt)
+                OpenResult();
+        }
+
+        private void ShakeTray()
+        {
+            effectMotions.Add(LMotion.Create(0f, 1f, .55f)
+                .WithOnComplete(() => trayGroup.anchoredPosition = Vector2.zero)
+                .Bind(t =>
+                {
+                    trayGroup.anchoredPosition = new Vector2(Mathf.Sin(t * Mathf.PI * 9f) * 16f * (1f - t), 0f);
+                    Color flash = Color.Lerp(TrayRecess, SlotAlarm, Mathf.Sin(Mathf.Min(1f, t * 1.4f) * Mathf.PI));
+                    foreach (Image slot in slots)
+                        slot.color = flash;
+                }));
+        }
+
+        private void OpenResult()
+        {
+            bool lost = board.Status == PackingStatus.Lost;
+            completionCard.gameObject.SetActive(true);
+            RefreshResult();
+
+            Color tint = completionTint.color;
+            resultPanel.localScale = Vector3.one * .55f;
+            effectMotions.Add(LMotion.Create(0f, 1f, .48f)
+                .Bind(t =>
+                {
+                    completionTint.color = new Color(tint.r, tint.g, tint.b, tint.a * Mathf.Clamp01(t * 2.5f));
+                    resultPanel.localScale = Vector3.one * Mathf.LerpUnclamped(.55f, 1f, OutBack(t));
+                }));
+            ShowResultReward(!lost);
+            if (!lost)
+                SpawnConfetti();
+        }
+
+        private void SpawnConfetti() => SpawnConfettiIn(completionCard, effectMotions);
+
+        private void SpawnConfettiIn(RectTransform parent, List<MotionHandle> motions)
+        {
+            Color[] palette = { Mint, Gold, Lilac, Peach, new Color32(118, 200, 230, 255), Paper };
+            Vector2 size = parent.rect.size;
+            for (int index = 0; index < 46; index++)
+            {
+                Image piece = Panel(parent, "Confetti", Fill, palette[index % palette.Length], true);
+                RectTransform rect = piece.rectTransform;
+                rect.anchorMin = rect.anchorMax = new Vector2(.5f, .5f);
+                rect.sizeDelta = new Vector2(Random.Range(14f, 22f), Random.Range(24f, 36f));
+                Vector2 origin = new Vector2(Random.Range(-.08f, .08f) * size.x, size.y * .2f);
+                rect.localPosition = origin;
+                float angle = Random.Range(35f, 145f) * Mathf.Deg2Rad;
+                Vector2 velocity = new Vector2(Mathf.Cos(angle), Mathf.Sin(angle)) * Random.Range(650f, 1250f);
+                float spin = Random.Range(-720f, 720f);
+                float flutter = Random.Range(6f, 12f);
+                float duration = Random.Range(1.5f, 2.2f);
+                motions.Add(LMotion.Create(0f, duration, duration)
+                    .WithDelay(Random.Range(0f, .12f))
+                    .WithOnComplete(() => Destroy(rect.gameObject))
+                    .Bind(t =>
+                    {
+                        // Air drag keeps the pieces drifting instead of dropping like stones.
+                        float drag = (1f - Mathf.Exp(-2.4f * t)) / 2.4f;
+                        Vector2 position = origin + velocity * drag + Vector2.down * (520f * t * t);
+                        position.x += Mathf.Sin(t * flutter) * 18f;
+                        rect.localPosition = position;
+                        rect.localRotation = Quaternion.Euler(0f, 0f, spin * t);
+                        rect.localScale = new Vector3(Mathf.Cos(t * flutter), 1f, 1f);
+                        piece.color = new Color(piece.color.r, piece.color.g, piece.color.b,
+                            Mathf.Clamp01((duration - t) / .45f));
+                    }));
+            }
         }
 
         private void SetFeedback(string message, Color color)
@@ -759,34 +1254,23 @@ namespace CampusCrates
             feedback.transform.parent.gameObject.SetActive(message.Length != 0);
         }
 
-        private void Refresh()
+        private void Refresh(bool instant = false)
         {
-            RefreshResult();
+            if (board.Status == PackingStatus.Playing)
+                completionCard.gameObject.SetActive(false);
             hintButton.gameObject.SetActive(level > 1 && board.Status == PackingStatus.Playing);
             if (shape == null)
-                RefreshColumns();
+                RefreshColumns(instant);
             else
-                RefreshShape();
+                RefreshShape(instant);
 
-            RefreshTray();
-            crateCount.text = $"{board.CratesPacked} / {board.TotalCrates}";
-            trayCount.text = $"{board.Tray.Count} / {PackingBoard.TrayCapacity}";
-            trayCount.color = board.Tray.Count >= 6 ? Peach : Gold;
+            crateCount.text = $"{displayedCrates} / {board.TotalCrates}";
+            UpdateTrayCount();
             RefreshOpeningGuide();
         }
 
         private void RefreshResult()
         {
-            bool ended = board.Status != PackingStatus.Playing;
-            if (ended && !completionCard.gameObject.activeSelf)
-            {
-                resultOpenedAt = Time.unscaledTime;
-                resultPanel.localScale = Vector3.one * .84f;
-            }
-            completionCard.gameObject.SetActive(ended);
-            if (!ended)
-                return;
-
             bool lost = board.Status == PackingStatus.Lost;
             bool finalLevel = level == ShapeLevel.Last;
             if (crateArtwork != null)
@@ -812,7 +1296,7 @@ namespace CampusCrates
             completionAction.text = finalLevel ? "Main Menu" : "Next Level";
         }
 
-        private void RefreshColumns()
+        private void RefreshColumns(bool instant)
         {
             for (int column = 0; column < cards.Length; column++)
             {
@@ -822,18 +1306,44 @@ namespace CampusCrates
                     CardDisplay card = cards[column][index];
                     bool visible = index >= front;
                     bool ready = index == front && board.Status == PackingStatus.Playing;
+                    bool unlocked = index == front;
                     card.Button.gameObject.SetActive(visible);
                     card.Button.interactable = ready;
                     if (visible)
-                        Place((RectTransform)card.Button.transform, CardBounds(column, index - front));
-                    card.Button.image.color = ready ? Paper : CoveredTile;
-                    card.Lock.gameObject.SetActive(!ready);
-                    Place(card.Icon, ready ? At(.105f, .12f, .895f, .935f) : At(.06f, .616f, .76f, .985f));
+                        MoveCard(card, CardBounds(column, index - front), instant);
+                    card.Lock.gameObject.SetActive(!unlocked);
+                    Place(card.Icon, unlocked ? At(.105f, .12f, .895f, .935f) : At(.06f, .616f, .76f, .985f));
+                    ApplyTileLook(card, unlocked, instant);
                 }
             }
         }
 
-        private void RefreshShape()
+        private void MoveCard(CardDisplay card, Rect bounds, bool instant)
+        {
+            var rect = (RectTransform)card.Button.transform;
+            if (instant)
+            {
+                card.Move.TryCancel();
+                Place(rect, bounds);
+                return;
+            }
+            if (rect.anchorMin == bounds.min && rect.anchorMax == bounds.max)
+                return;
+
+            Vector2 fromMin = rect.anchorMin;
+            Vector2 fromMax = rect.anchorMax;
+            card.Move.TryCancel();
+            card.Move = LMotion.Create(0f, 1f, .26f)
+                .WithEase(Ease.OutBack)
+                .Bind(t =>
+                {
+                    rect.anchorMin = Vector2.LerpUnclamped(fromMin, bounds.min, t);
+                    rect.anchorMax = Vector2.LerpUnclamped(fromMax, bounds.max, t);
+                })
+                .AddTo(rect.gameObject);
+        }
+
+        private void RefreshShape(bool instant)
         {
             for (int index = 0; index < shape.Length; index++)
             {
@@ -843,31 +1353,45 @@ namespace CampusCrates
                 card.Button.gameObject.SetActive(visible);
                 card.Button.interactable = ready;
                 card.Button.image.raycastTarget = ready;
-                card.Button.image.color = ready ? Paper : Behind;
-                // Dim the whole blocked tile while leaving its visible edges recognizable.
-                card.Shade.alpha = ready ? 1f : .72f;
+                ApplyTileLook(card, ready || (board.Status != PackingStatus.Playing && card.WasReady == true), instant);
             }
         }
 
-        private void RefreshTray()
+        // Freed tiles warm up and hop once so the player notices what just opened.
+        private void ApplyTileLook(CardDisplay card, bool open, bool instant)
         {
-            for (int index = 0; index < slots.Length; index++)
+            Color face = open ? (Color)Paper : BlockedFace;
+            Color icon = open ? Color.white : (Color)BlockedIcon;
+            bool reveal = !instant && open && card.WasReady == false && card.Button.gameObject.activeSelf;
+            card.WasReady = open;
+            if (!reveal)
             {
-                SupplyKind? kind = index < board.Tray.Count ? board.Tray[index] : (SupplyKind?)null;
-                if (kind == slotKinds[index])
-                    continue;
-                if (slotIcons[index] != null)
+                if (!card.Anim.IsActive() || instant)
                 {
-                    slotIcons[index].gameObject.SetActive(false);
-                    Destroy(slotIcons[index].gameObject);
+                    card.Button.image.color = face;
+                    if (card.IconImage != null)
+                        card.IconImage.color = icon;
                 }
-
-                slotKinds[index] = kind;
-                slotIcons[index] = kind.HasValue
-                    ? SupplyIcon(slots[index].transform, kind.Value, At(.05f, .05f, .95f, .95f))
-                    : null;
+                return;
             }
 
+            Image image = card.Button.image;
+            Image iconImage = card.IconImage;
+            Color fromFace = image.color;
+            Color fromIcon = iconImage != null ? iconImage.color : Color.white;
+            var rect = (RectTransform)card.Button.transform;
+            card.Anim.TryCancel();
+            card.Anim = LMotion.Create(0f, 1f, .32f)
+                .WithOnComplete(() => rect.localScale = Vector3.one)
+                .Bind(t =>
+                {
+                    float warm = OutCubic(Mathf.Min(1f, t * 1.8f));
+                    image.color = Color.Lerp(fromFace, face, warm);
+                    if (iconImage != null)
+                        iconImage.color = Color.Lerp(fromIcon, icon, warm);
+                    rect.localScale = Vector3.one * (1f + .11f * Mathf.Sin(t * Mathf.PI) * (1f - t * .5f));
+                })
+                .AddTo(rect.gameObject);
         }
 
         private void RefreshOpeningGuide()
@@ -881,15 +1405,14 @@ namespace CampusCrates
                 return;
 
             int column = hint.Value.Column;
-            highlightedTile = cards[column][board.FrontIndex(column)].HintOutline;
-            highlightedTile.enabled = true;
+            Highlight(cards[column][board.FrontIndex(column)]);
             Rect tile = CardBounds(column, 0);
             Place(guideMarker, At(tile.center.x - .07f, tile.yMax + .007f, tile.center.x + .07f, tile.yMax + .064f));
         }
 
         private void ShowMatchHint()
         {
-            if (flyingCard != null || board.Status != PackingStatus.Playing)
+            if (board.Status != PackingStatus.Playing)
                 return;
 
             ClearHighlight();
@@ -900,28 +1423,36 @@ namespace CampusCrates
                 return;
             }
 
-            CardDisplay card = tileCards[tile];
+            Highlight(tileCards[tile]);
+            SetFeedback("", Ink);
+        }
+
+        private void Highlight(CardDisplay card)
+        {
             if (card.HintOutline == null)
                 card.HintOutline = CreateHintOutline(card);
-            highlightedTile = card.HintOutline;
-            highlightedTile.enabled = true;
-            SetFeedback("", Ink);
+            card.HintOutline.enabled = true;
+            highlightedCard = card;
         }
 
         private static Outline CreateHintOutline(CardDisplay card)
         {
             var outline = card.Button.gameObject.AddComponent<Outline>();
             outline.effectColor = new Color32(255, 181, 45, 255);
-            outline.effectDistance = new Vector2(13, 13);
+            outline.effectDistance = new Vector2(10, 10);
             outline.enabled = false;
             return outline;
         }
 
         private void ClearHighlight()
         {
-            if (highlightedTile != null)
-                highlightedTile.enabled = false;
-            highlightedTile = null;
+            if (highlightedCard != null)
+            {
+                highlightedCard.HintOutline.enabled = false;
+                if (!highlightedCard.Anim.IsActive())
+                    highlightedCard.Button.transform.localScale = Vector3.one;
+            }
+            highlightedCard = null;
         }
 
         private Rect CardBounds(int column, int depth)
@@ -936,8 +1467,13 @@ namespace CampusCrates
         private RectTransform DrawLock(Transform parent, Rect bounds)
         {
             var mark = Box(parent, "Locked", bounds);
+            if (UiSprite("lock", Vector4.zero) != null)
+            {
+                IconImage(mark, "Padlock", "lock", At(-.15f, -.15f, 1.15f, 1.15f));
+                return mark;
+            }
             Panel(mark, "Shackle", At(.25f, .43f, .75f, .92f), Muted, true);
-            Panel(mark, "Shackle cutout", At(.39f, .49f, .61f, .75f), CoveredTile);
+            Panel(mark, "Shackle cutout", At(.39f, .49f, .61f, .75f), LockCutout);
             Panel(mark, "Lock body", At(.13f, .12f, .87f, .59f), Muted, true);
             return mark;
         }
@@ -1018,19 +1554,56 @@ namespace CampusCrates
             return sprite;
         }
 
-        private void CancelFlight()
+        private void CreateEffectSprites()
         {
-            if (flyingCard == null)
-                return;
-            cardFlight.TryCancel();
-            RemoveFlyingCard();
+            const int size = 64;
+            var glow = new Texture2D(size, size, TextureFormat.RGBA32, false);
+            var sparkle = new Texture2D(size, size, TextureFormat.RGBA32, false);
+            var glowPixels = new Color32[size * size];
+            var sparklePixels = new Color32[size * size];
+            for (int y = 0; y < size; y++)
+            for (int x = 0; x < size; x++)
+            {
+                float u = (x + .5f) / size * 2f - 1f;
+                float v = (y + .5f) / size * 2f - 1f;
+                float radius = Mathf.Sqrt(u * u + v * v);
+                float soft = Mathf.Clamp01(1f - radius);
+                glowPixels[y * size + x] = new Color32(255, 255, 255, (byte)(255 * soft * soft));
+
+                // Four-point star (astroid) with a small bright core.
+                float star = 1f - (Mathf.Sqrt(Mathf.Abs(u)) + Mathf.Sqrt(Mathf.Abs(v)));
+                float alpha = Mathf.Clamp01(star * 4f) + Mathf.Clamp01(1f - radius * 3.2f) * .6f;
+                sparklePixels[y * size + x] = new Color32(255, 255, 255, (byte)(255 * Mathf.Clamp01(alpha)));
+            }
+            glow.SetPixels32(glowPixels);
+            glow.Apply(false, true);
+            sparkle.SetPixels32(sparklePixels);
+            sparkle.Apply(false, true);
+            generatedTextures.Add(glow);
+            generatedTextures.Add(sparkle);
+            glowSprite = Sprite.Create(glow, new Rect(0, 0, size, size), new Vector2(.5f, .5f));
+            sparkleSprite = Sprite.Create(sparkle, new Rect(0, 0, size, size), new Vector2(.5f, .5f));
+            generatedArt.Add(glowSprite);
+            generatedArt.Add(sparkleSprite);
         }
 
-        private void RemoveFlyingCard()
+        private static float OutCubic(float t) => 1f - Mathf.Pow(1f - t, 3f);
+
+        private static float InOutCubic(float t)
+            => t < .5f ? 4f * t * t * t : 1f - Mathf.Pow(-2f * t + 2f, 3f) * .5f;
+
+        private static float OutBack(float t)
         {
-            flyingCard.gameObject.SetActive(false);
-            Destroy(flyingCard.gameObject);
-            flyingCard = null;
+            const float c1 = 1.70158f;
+            const float c3 = c1 + 1f;
+            return 1f + c3 * Mathf.Pow(t - 1f, 3f) + c1 * Mathf.Pow(t - 1f, 2f);
+        }
+
+        private static float InBack(float t)
+        {
+            const float c1 = 1.70158f;
+            const float c3 = c1 + 1f;
+            return c3 * t * t * t - c1 * t * t;
         }
 
         private void CreateRoundedTile()
@@ -1055,10 +1628,14 @@ namespace CampusCrates
 
         private void OnDestroy()
         {
-            if (flyingCard != null)
-                cardFlight.TryCancel();
+            foreach (MotionHandle handle in effectMotions)
+                handle.TryCancel();
+            screenFade.TryCancel();
+            settingsFade.TryCancel();
             foreach (Sprite sprite in generatedArt)
                 Destroy(sprite);
+            foreach (Texture2D texture in generatedTextures)
+                Destroy(texture);
             Destroy(roundedTile);
             Destroy(roundedTexture);
         }
@@ -1119,9 +1696,10 @@ namespace CampusCrates
                 primary ? NextButtonArtworkCrop : MintButtonArtworkCrop, faceColor);
         }
 
-        private Button MakeArtButton(Transform parent, string name, Rect bounds, string resource, Rect crop, Color fallback)
+        private Button MakeArtButton(Transform parent, string name, Rect bounds, string resource, Rect crop, Color fallback,
+            bool press = true)
         {
-            Button button = MakeButton(parent, name, bounds, Color.clear);
+            Button button = MakeButton(parent, name, bounds, Color.clear, press);
             RawImage art = AddThemeArt(button.transform, "Button artwork", resource, Fill, crop);
             if (art != null)
                 button.targetGraphic = art;
@@ -1143,11 +1721,13 @@ namespace CampusCrates
             return image;
         }
 
-        private Button MakeButton(Transform parent, string objectName, Rect bounds, Color color)
+        private Button MakeButton(Transform parent, string objectName, Rect bounds, Color color, bool press = true)
         {
             Image image = Panel(parent, objectName, bounds, color, true);
             image.raycastTarget = true;
             var button = image.gameObject.AddComponent<Button>();
+            if (press)
+                image.gameObject.AddComponent<PressFeedback>();
             button.targetGraphic = image;
             var colors = button.colors;
             colors.disabledColor = Color.white;
