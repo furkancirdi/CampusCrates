@@ -5,7 +5,7 @@ namespace CampusCrates
 {
     public static class OpeningLevel
     {
-        public const int Count = 4;
+        public const int Count = 5;
 
         public static SupplyKind[][] Create(int level) => level switch
         {
@@ -27,7 +27,14 @@ namespace CampusCrates
                 new[] { Notebook, Cup, Pencil },
                 new[] { Pencil, Notebook, Cup }
             },
+            // Badges arrive in a forgiving order: most careless routes still finish.
             4 => new[]
+            {
+                new[] { Cup, Badge, Badge, Notebook },
+                new[] { Badge, Pencil, Pencil, Notebook },
+                new[] { Pencil, Cup, Notebook, Cup }
+            },
+            5 => new[]
             {
                 new[] { Notebook, Pencil, Cup, Badge },
                 new[] { Notebook, Cup, Badge, Pencil },

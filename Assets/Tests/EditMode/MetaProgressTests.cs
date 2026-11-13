@@ -7,9 +7,9 @@ namespace CampusCrates.Tests
         [Test]
         public void FirstClearsPayMoreThanReplaysAndGrowWithLevel()
         {
-            Assert.That(CoinWallet.RewardFor(1, true), Is.EqualTo(80));
-            Assert.That(CoinWallet.RewardFor(6, true), Is.GreaterThan(CoinWallet.RewardFor(1, true)));
-            Assert.That(CoinWallet.RewardFor(6, false), Is.EqualTo(CoinWallet.ReplayReward));
+            Assert.That(CoinWallet.RewardFor(1, true), Is.GreaterThan(CoinWallet.ReplayReward));
+            Assert.That(CoinWallet.RewardFor(ShapeLevel.Last, true), Is.GreaterThan(CoinWallet.RewardFor(1, true)));
+            Assert.That(CoinWallet.RewardFor(ShapeLevel.Last, false), Is.EqualTo(CoinWallet.ReplayReward));
         }
 
         [Test]

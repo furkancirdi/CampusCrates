@@ -51,7 +51,7 @@ namespace CampusCrates.Tests
         [Test]
         public void HintFindsAMatchingTileInASpatialLevel()
         {
-            var board = new PackingBoard(ShapeLevel.Create(ShapeLevel.First));
+            var board = new PackingBoard(ShapeLevel.Create(ShapeLevel.Pyramid));
             PlayTiles(board, 5, 17);
             Assert.That(board.FindMatchHint(), Is.EqualTo(0));
         }
@@ -59,7 +59,7 @@ namespace CampusCrates.Tests
         [Test]
         public void PyramidCapReleasesFourTilesAndResetCoversThemAgain()
         {
-            var level = ShapeLevel.Create(ShapeLevel.First);
+            var level = ShapeLevel.Create(ShapeLevel.Pyramid);
             var board = new PackingBoard(level);
             int[] covered = { 1, 2, 3, 4 };
             foreach (int tile in covered)
@@ -77,7 +77,7 @@ namespace CampusCrates.Tests
         [Test]
         public void StarTileWaitsForAllCoversAndHidesTheExactOverlap()
         {
-            var level = ShapeLevel.Create(ShapeLevel.Last);
+            var level = ShapeLevel.Create(ShapeLevel.Star);
             var board = new PackingBoard(level);
             Assert.That(board.IsPresent(0), Is.True);
             Assert.That(level[0].FullCover, Is.EqualTo(15));
@@ -95,12 +95,12 @@ namespace CampusCrates.Tests
         [Test]
         public void BothSpatialLevelsCanBeSolved()
         {
-            var pyramid = new PackingBoard(ShapeLevel.Create(ShapeLevel.First));
+            var pyramid = new PackingBoard(ShapeLevel.Create(ShapeLevel.Pyramid));
             PlayTiles(pyramid, 5, 17, 13, 16, 6, 15, 14, 9, 10, 0, 2, 1, 4, 3, 11, 12, 8, 7);
             Assert.That(pyramid.CratesPacked, Is.EqualTo(6));
             Assert.That(pyramid.Status, Is.EqualTo(PackingStatus.Won));
 
-            var star = new PackingBoard(ShapeLevel.Create(ShapeLevel.Last));
+            var star = new PackingBoard(ShapeLevel.Create(ShapeLevel.Star));
             PlayTiles(star, 1, 20, 17, 6, 16, 14, 10, 18, 2, 19, 4, 8, 3, 12, 9, 7, 5, 11, 15, 0, 13);
             Assert.That(star.CratesPacked, Is.EqualTo(7));
             Assert.That(star.Status, Is.EqualTo(PackingStatus.Won));
@@ -162,9 +162,9 @@ namespace CampusCrates.Tests
         }
 
         [Test]
-        public void FourthLevelNeedsAnUncoveringMoveAndCanBeSolved()
+        public void PackingRushNeedsAnUncoveringMoveAndCanBeSolved()
         {
-            var board = new PackingBoard(OpeningLevel.Create(4));
+            var board = new PackingBoard(OpeningLevel.Create(5));
             Play(board, 0, 1, 2);
             Assert.That(board.Tray, Is.EqualTo(new[] { Notebook, Notebook, Pencil }));
             Assert.That(board.CratesPacked, Is.Zero);
@@ -179,9 +179,9 @@ namespace CampusCrates.Tests
         }
 
         [Test]
-        public void FourthLevelCanFillTheTrayByClearingStacksWithoutPlanning()
+        public void PackingRushCanFillTheTrayByClearingStacksWithoutPlanning()
         {
-            var board = new PackingBoard(OpeningLevel.Create(4));
+            var board = new PackingBoard(OpeningLevel.Create(5));
             Play(board, 0, 0, 0, 0, 1, 1);
             Assert.That(board.Status, Is.EqualTo(PackingStatus.Playing));
 
@@ -193,7 +193,7 @@ namespace CampusCrates.Tests
         [Test]
         public void NotebookHintShowsTheCoveringTileAndStopsAtTheFirstCrate()
         {
-            var layout = OpeningLevel.Create(4);
+            var layout = OpeningLevel.Create(5);
             var board = new PackingBoard(layout);
 
             Assert.That(OpeningLevel.NotebookHint(layout, board), Is.EqualTo((0, false)));
@@ -210,7 +210,7 @@ namespace CampusCrates.Tests
         [Test]
         public void NotebookHintFollowsAnAlternativeOpening()
         {
-            var layout = OpeningLevel.Create(4);
+            var layout = OpeningLevel.Create(5);
             var board = new PackingBoard(layout);
             Play(board, 2, 2, 0);
 

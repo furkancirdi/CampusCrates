@@ -38,19 +38,30 @@ namespace CampusCrates
         private static readonly Rect NextButtonArtworkCrop = new Rect(0f, .135f, 1f, .735f);
         private static readonly Rect MintButtonArtworkCrop = new Rect(.005f, .09f, .99f, .82f);
         private const float TrailArtAspect = 941f / 1672f;
-        private static readonly string[] StopNames = { "First Crate", "Unpack", "Supply Run", "Packing Rush", "Pyramid", "Star" };
+        private static readonly string[] StopNames =
+        {
+            "First Crate", "Unpack", "Supply Run", "Badge Day", "Packing Rush",
+            "Stack Up", "Pyramid", "Hidden One", "Double Deck", "Star"
+        };
+        // Ten stops spaced evenly along the painted path, bottom gate to main hall.
         private static readonly Vector2[] TrailStops =
         {
-            new Vector2(.490f, .219f), new Vector2(.225f, .394f), new Vector2(.770f, .522f),
-            new Vector2(.235f, .662f), new Vector2(.727f, .750f), new Vector2(.536f, .806f)
+            new Vector2(.490f, .219f), new Vector2(.370f, .330f), new Vector2(.266f, .439f),
+            new Vector2(.531f, .466f), new Vector2(.768f, .524f), new Vector2(.534f, .587f),
+            new Vector2(.277f, .636f), new Vector2(.420f, .712f), new Vector2(.689f, .741f),
+            new Vector2(.536f, .806f)
         };
         private static readonly Vector2[][] TrailBends =
         {
-            new[] { new Vector2(.490f, .300f), new Vector2(.325f, .342f) },
-            new[] { new Vector2(.273f, .446f), new Vector2(.510f, .464f), new Vector2(.710f, .484f) },
-            new[] { new Vector2(.723f, .562f), new Vector2(.465f, .596f), new Vector2(.295f, .625f) },
-            new[] { new Vector2(.325f, .704f), new Vector2(.499f, .718f), new Vector2(.668f, .736f) },
-            new[] { new Vector2(.706f, .778f), new Vector2(.635f, .800f) }
+            new[] { new Vector2(.490f, .300f) },
+            new[] { new Vector2(.325f, .342f), new Vector2(.225f, .394f) },
+            new[] { new Vector2(.510f, .464f) },
+            new[] { new Vector2(.710f, .484f) },
+            new[] { new Vector2(.723f, .562f) },
+            new[] { new Vector2(.465f, .596f), new Vector2(.295f, .625f) },
+            new[] { new Vector2(.235f, .662f), new Vector2(.325f, .704f) },
+            new[] { new Vector2(.499f, .718f), new Vector2(.668f, .736f) },
+            new[] { new Vector2(.727f, .750f), new Vector2(.706f, .778f), new Vector2(.635f, .800f) }
         };
 
         // Blocked tiles read as the same tile resting in shadow, not as a hole in the board.
@@ -60,6 +71,7 @@ namespace CampusCrates
         private static readonly Color32 PlayMat = new Color32(18, 58, 54, 132);
         private static readonly Color32 SlotAlarm = new Color32(196, 62, 44, 215);
         private const float FlightTime = .3f;
+        private const float StackPeek = .11f;
 
         private CardDisplay[][] cards;
         private CardDisplay[] tileCards;
@@ -150,6 +162,9 @@ namespace CampusCrates
             public bool? WasReady;
             public MotionHandle Anim;
             public MotionHandle Move;
+            // Only set for a tile that starts directly under another one.
+            public Rect Home;
+            public Rect Tucked;
         }
 
         // The tray is drawn from its own list so items can fly, slide and merge while the
@@ -374,7 +389,7 @@ namespace CampusCrates
             {
                 int number = index + 1;
                 Button stop = MakeArtButton(trail, $"Stop {number} / {StopNames[index]}",
-                    Centered(TrailStops[index], .158f, .158f * TrailArtAspect), "trail-pin", Fill, Gold, press: false);
+                    Centered(TrailStops[index], .136f, .136f * TrailArtAspect), "trail-pin", Fill, Gold, press: false);
                 Headline(stop.transform, "Stop number", number.ToString(), At(.17f, .20f, .83f, .89f), 54, StrokeTeal, TextWhite, 3f);
                 levelLocks[index] = DrawLock(stop.transform, At(.73f, .075f, .94f, .34f));
                 levelStamps[index] = SupplyIcon(stop.transform, SupplyKind.Badge, At(.64f, .04f, .97f, .37f));
@@ -780,6 +795,14 @@ namespace CampusCrates
             fitter.aspectMode = AspectRatioFitter.AspectMode.FitInParent;
             fitter.aspectRatio = 1f;
 
+            // A tile lying exactly under another would be invisible. Pull the pair apart a
+            // little so the lower one shows as a dark edge and the two read as a stack.
+            float peek = ShapeLevel.TileSize * StackPeek;
+            var sitsOnATile = new bool[shape.Length];
+            foreach (ShapeTile under in shape)
+                if (under.FullCover >= 0)
+                    sitsOnATile[under.FullCover] = true;
+
             float halfTile = ShapeLevel.TileSize * .5f;
             for (int index = 0; index < shape.Length; index++)
             {
@@ -787,8 +810,12 @@ namespace CampusCrates
                 ShapeTile tile = shape[index];
                 float x = .5f + tile.X * ShapeLevel.Pitch;
                 float y = .5f + tile.Y * ShapeLevel.Pitch;
+                if (sitsOnATile[index])
+                    y += peek;
                 var bounds = At(x - halfTile, y - halfTile, x + halfTile, y + halfTile);
                 CardDisplay card = CreateTile(square, $"Tile {index + 1} / {tile.Kind}", tile.Kind, bounds);
+                card.Home = bounds;
+                card.Tucked = At(x - halfTile, y - halfTile - peek, x + halfTile, y + halfTile - peek);
                 tileCards[index] = card;
                 card.Button.onClick.AddListener(() => Select(card, tile.Kind, tileIndex));
             }
@@ -1349,8 +1376,15 @@ namespace CampusCrates
             {
                 CardDisplay card = tileCards[index];
                 bool ready = board.CanSelect(index);
-                bool visible = board.IsPresent(index) && !board.IsPresent(shape[index].FullCover);
-                card.Button.gameObject.SetActive(visible);
+                int cover = shape[index].FullCover;
+                bool tucked = cover >= 0 && board.IsPresent(cover);
+                card.Button.gameObject.SetActive(board.IsPresent(index));
+                if (cover >= 0)
+                {
+                    // What the tile is stays a surprise until the one on top is taken.
+                    card.Icon.gameObject.SetActive(!tucked);
+                    MoveCard(card, tucked ? card.Tucked : card.Home, instant);
+                }
                 card.Button.interactable = ready;
                 card.Button.image.raycastTarget = ready;
                 ApplyTileLook(card, ready || (board.Status != PackingStatus.Playing && card.WasReady == true), instant);

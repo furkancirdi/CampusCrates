@@ -17,7 +17,7 @@ namespace CampusCrates
 
         /// <summary>First clears pay more for later levels; replays pay a small steady amount.</summary>
         public static int RewardFor(int level, bool firstClear)
-            => firstClear ? 60 + 20 * Math.Max(1, level) : ReplayReward;
+            => firstClear ? 40 + 8 * Math.Max(1, level) : ReplayReward;
 
         public void Earn(int amount)
         {
