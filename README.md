@@ -4,11 +4,19 @@ A small triple-match puzzle for phones, made in Unity 6. You are packing supplie
 
 I am a software developer and I want to move into product work in mobile games. I made this to practice the product side on something real: what the player should learn first, when to add a new rule, and how I would check that it works.
 
-It is a prototype. There are 10 levels and a Windows build. Nobody outside has playtested it yet, so I have no player data to show.
+It is a prototype with 10 levels that runs in the Unity editor. There is no downloadable build yet. Nobody outside has playtested it, so I have no player data to show.
+
+<p>
+  <img src="docs/screenshots/home.jpg" width="19%" alt="Home screen">
+  <img src="docs/screenshots/level-5.jpg" width="19%" alt="Level 5, three stacks">
+  <img src="docs/screenshots/level-9.jpg" width="19%" alt="Level 9, tiles in three layers">
+  <img src="docs/screenshots/map.jpg" width="19%" alt="Festival trail map">
+  <img src="docs/screenshots/room.jpg" width="19%" alt="Club room">
+</p>
 
 ## How it plays
 
-You can only pick tiles that are not covered. Covered ones show a lock. A picked tile goes to the tray, and three of a kind clear out and become a crate. Pack everything and you win. If the tray is full with 7 tiles and no match, you lose the attempt.
+You can only pick tiles that are not covered. Covered ones are darker, and in the first levels they also show a lock. When one tile lies exactly under another you only see its edge, and you find out what it is after taking the one on top. A picked tile goes to the tray, and three of a kind clear out and become a crate. Pack everything and you win. If the tray is full with 7 tiles and no match, you lose the attempt.
 
 From Level 2 there is a hint button. It points at the third tile when you already have two of that kind in the tray.
 
@@ -25,9 +33,9 @@ I tried to add only one new thing per level, and to keep each step in difficulty
 | 5 Packing Rush | Same four types in an order that punishes clearing stacks blindly | 74% |
 | 6 Stack Up | First overlapping layout: a small block held down by three tiles | 63% |
 | 7 Pyramid | A bigger shape. One tile on top can cover four | 51% |
-| 8 Hidden One | Three layers, and one tile that is completely hidden | 42% |
-| 9 Double Deck | A wider version with two hidden tiles | 33% |
-| 10 Star | Several hidden tiles and ten open choices at the start | 25% |
+| 8 Hidden One | Three layers, and one tile buried right under another | 42% |
+| 9 Double Deck | A wider version with two buried tiles | 33% |
+| 10 Star | Several buried tiles and ten open choices at the start | 25% |
 
 The last column is not player data. It is how often a simulated player wins when it taps any open tile at random, over 40,000 games per level. I use it as a rough ruler for how much planning a level needs.
 
@@ -71,7 +79,7 @@ Tests are under Window > General > Test Runner > EditMode.
 
 ## What is missing
 
-- I have only run it in the Simulator and as a Windows build, not on a real phone
+- I have only run it in the Unity Simulator, not on a real phone
 - No analytics, ads or purchases
 - Ten levels. The difficulty order comes from simulation, I have not checked it with real players yet
 
